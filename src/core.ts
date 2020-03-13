@@ -23,6 +23,7 @@ export function handleRequestStream(
             response.flags = flags;
 
             if (decodeOptions.mode === DecodeMode.Stream) {
+                stream.on('end', () => initialStream.close());
                 response.data = stream;
                 if (isFullResponse(response)) resolve(response);
                 else reject(new Error('Partial response'));
