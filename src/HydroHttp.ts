@@ -1,15 +1,19 @@
 import { connect as http2connect, ClientHttp2Session, constants, ClientHttp2Stream } from 'http2';
 import { format, parse } from 'url';
-import { HydroBody, HydroHttpInitOptions, HydroRequestOptions } from './types';
+import { HydroBody, HydroHttpInitOptions, HydroRequestOptions, HydroResponseBody } from './types';
 import * as querystring from 'querystring';
-import { Cookie, CookieJar } from 'tough-cookie';
+import { CookieJar } from 'tough-cookie';
 import { CookieError } from './errors';
 import { HydroResponse } from './HydroResponse';
-import { HydroRequest } from './HydroRequest';
-import { Readable } from 'stream';
 import * as FormData from 'form-data';
+import { caseless, forceDeep, getCookieStringAsync, pipeBodyToStream, setCookieAsync } from './utilities';
+import { fullHydroRequest } from './core';
+import { pull } from 'lodash';
 
 export class HydroHttp {
+
+    protected activeRequests: ClientHttp2Stream[] = [];
+
     constructor(protected session: ClientHttp2Session, protected options: HydroHttpInitOptions) {}
 
     public static initSync(options: HydroHttpInitOptions): HydroHttp {
@@ -28,7 +32,7 @@ export class HydroHttp {
         );
     }
 
-    public async request(options: HydroRequestOptions): Promise<HydroResponse> {
+    public async request<T extends HydroResponseBody | HydroResponse = HydroResponseBody>(options: HydroRequestOptions): Promise<T> {
         let path = options.path;
         let qs = options.qs;
         if (path.includes('?')) {
@@ -43,9 +47,9 @@ export class HydroHttp {
             qs = this.stringifyValues(qs);
             path = `${path}?${querystring.stringify(qs)}`;
         }
-        const headers = this.stringifyHeaders(options.headers ?? {});
+        const headers = caseless(this.stringifyHeaders(options.headers ?? {}));
         const setHeaderNoExist = (name: string, value: string | string[] | any) => !headers[name] && (headers[name] = value);
-        (this.options.jar || options.jar) && setHeaderNoExist(constants.HTTP2_HEADER_COOKIE, (await HydroHttp.getCookieStringAsync(
+        (this.options.jar || options.jar) && setHeaderNoExist(constants.HTTP2_HEADER_COOKIE, (await getCookieStringAsync(
             // @ts-ignore -- jar is CookieJar
             options.jar ?? this.options.jar,
             format({
@@ -81,18 +85,58 @@ export class HydroHttp {
             [constants.HTTP2_HEADER_METHOD]: options.method ?? 'GET',
             ...headers,
         });
+        this.activeRequests.push(stream);
         if(body) {
-            await HydroHttp.pipeBodyToStream(body, stream);
+            await pipeBodyToStream(body, stream);
         }
-        const response = await new HydroRequest(
+        const response = await fullHydroRequest(
             stream,
             options.decode,
-        ).execute();
+        );
         await this.handleResponse(response, options);
-        return response;
+        this.activeRequests = pull(this.activeRequests, stream);
+        // @ts-ignore -- this is assignable
+        return options.decode?.fullResponse ? response : response.body;
+    }
+
+    public get<T = any>(options: HydroRequestOptions): Promise<HydroResponse<T> | HydroResponseBody> {
+        return this.request(forceDeep(options, {method: 'GET'}));
+    }
+
+    public post<T = any>(options: HydroRequestOptions): Promise<HydroResponse<T> | HydroResponseBody> {
+        return this.request(forceDeep(options, {method: 'POST'}));
+    }
+
+    public fullRequest<T = any>(options: HydroRequestOptions): Promise<HydroResponse<T>> {
+        return this.request(forceDeep(options, {decode: {fullResponse: true}}))
+    }
+
+    public fullGet<T = any>(options: HydroRequestOptions): Promise<HydroResponse<T>> {
+        // @ts-ignore -- only returns response obj
+        return this.get<T>(forceDeep(options, {decode: {fullResponse: true}}))
+    }
+
+    public fullPost<T = any>(options: HydroRequestOptions): Promise<HydroResponse<T>> {
+        // @ts-ignore -- only returns response obj
+        return this.post<T>(forceDeep(options, {decode: {fullResponse: true}}))
+    }
+
+    public simpleRequest<T = any>(options: HydroRequestOptions): Promise<HydroResponseBody<T>> {
+        return this.request(forceDeep(options, {decode: {fullResponse: false}}))
+    }
+
+    public simpleGet<T = any>(options: HydroRequestOptions): Promise<HydroResponseBody<T>> {
+        // @ts-ignore -- only returns response body
+        return this.get<T>(forceDeep(options, {decode: {fullResponse: false}}))
+    }
+
+    public simplePost<T = any>(options: HydroRequestOptions): Promise<HydroResponseBody<T>> {
+        // @ts-ignore -- only returns response body
+        return this.post<T>(forceDeep(options, {decode: {fullResponse: false}}))
     }
 
     public close() {
+        this.activeRequests.forEach(request => request.close());
         return this.session.close();
     }
 
@@ -104,7 +148,7 @@ export class HydroHttp {
             const res2 = (await this.putCookiesIntoJar(this.options.jar, cookies, href.href))?.filter(x => !!x);
             if (reqOptions.strictCookies && (res1?.length || res2?.length)) {
                 // @ts-ignore -- one will be full
-                throw new CookieError([...(res1 || []), ...(res2 || [])], "Some cookies couldn't be set");
+                throw new CookieError([...(res1 || []), ...(res2 || [])], 'Some cookies could not be set');
             }
         }
     }
@@ -112,7 +156,7 @@ export class HydroHttp {
     protected putCookiesIntoJar(jar: CookieJar | undefined, cookies: string[], url: string) {
         if (!jar) return;
         return Promise.all<Error | undefined>(
-            cookies.map(cookie => HydroHttp.setCookieAsync(jar, cookie, url).catch(e => e)),
+            cookies.map(cookie => setCookieAsync(jar, cookie, url).catch(e => e)),
         );
     }
 
@@ -132,31 +176,5 @@ export class HydroHttp {
                 typeof value === 'object' ? (Array.isArray(value) ? value : JSON.stringify(value)) : value.toString(),
             ]),
         );
-    }
-
-    protected static getCookieStringAsync(jar: CookieJar, url: string): Promise<string> {
-        return new Promise<string>((resolve, reject) =>
-            jar.getCookieString(url, (err, cookies) => (err ? reject(err) : resolve(cookies))),
-        );
-    }
-
-    protected static setCookieAsync(jar: CookieJar, cookie: Cookie | string, url: string) {
-        return new Promise<void>((resolve, reject) =>
-            jar.setCookie(cookie, url, err => (err ? reject(err) : resolve())),
-        );
-    }
-
-    protected static pipeBodyToStream(body: Buffer | string | Readable, stream: ClientHttp2Stream) {
-        if(body instanceof Buffer) {
-            return this.writeToStreamAsync(stream, body);
-        } else if(typeof body === 'string') {
-           return this.writeToStreamAsync(stream, body, 'utf8');
-        } else {
-           return body.pipe(stream);
-        }
-    }
-
-    protected static writeToStreamAsync(stream: ClientHttp2Stream, data: any, encoding?: string): Promise<void> {
-        return new Promise<void>((resolve, reject) => stream.write(data, encoding, error => error ? reject(error) : resolve()));
     }
 }

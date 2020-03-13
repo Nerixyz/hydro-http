@@ -1,7 +1,7 @@
 import { IncomingHttpHeaders, IncomingHttpStatusHeader } from 'http2';
 import { HydroResponse } from './HydroResponse';
 import { CookieJar } from 'tough-cookie';
-import { Readable } from 'stream';
+import { Duplex, Readable } from 'stream';
 import * as FormData from 'form-data';
 
 export interface HydroHttpInitOptions {
@@ -12,8 +12,9 @@ export interface HydroHttpInitOptions {
 export interface HydroResponseData {
     headers: IncomingHttpHeaders & IncomingHttpStatusHeader;
     flags?: number;
-    data: Buffer;
+    data: Buffer | Duplex;
 }
+export type HydroResponseBody<T = any> = Buffer | Duplex | string | T;
 
 export interface HydroRequestOptions {
     path: string;
@@ -38,10 +39,11 @@ export enum DecodeMode {
     Buffer,
     String,
     JSON,
+    Stream,
 }
 
 export interface HydroRequestDecodeOptions<T = any> {
     mode?: DecodeMode;
     transform?: (response: HydroResponse) => T;
-
+    fullResponse?: boolean;
 }

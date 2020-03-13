@@ -1,31 +1,25 @@
-import { HydroRequestDecodeOptions, HydroResponseData, DecodeMode } from './types';
-import { IncomingHttpHeaders, IncomingHttpStatusHeader, constants } from 'http2';
-import { promisify } from 'util';
-import { brotliDecompress, BrotliOptions, gunzip, inflate, ZlibOptions } from 'zlib';
+import { DecodeMode, HydroRequestDecodeOptions, HydroResponseData } from './types';
+import { IncomingHttpHeaders, IncomingHttpStatusHeader } from 'http2';
 import { Enumerable } from './Enumerable';
-const gunzipAsync = promisify((buffer: Buffer, options: ZlibOptions, cb: (err: Error | null, res: Buffer) => void) =>
-    gunzip(buffer, options, cb),
-);
-const inflateAsync = promisify((buffer: Buffer, options: ZlibOptions, cb: (err: Error | null, res: Buffer) => void) =>
-    inflate(buffer, options, cb),
-);
-const brotliAsync = promisify((buffer: Buffer, options: BrotliOptions, cb: (err: Error | null, res: Buffer) => void) =>
-    brotliDecompress(buffer, options, cb),
-);
+import { Duplex } from 'stream';
 
 export class HydroResponse<T = any> {
     @Enumerable(false)
     protected raw: HydroResponseData;
 
-    public body: T | Buffer | string;
+    public body: T | Buffer | Duplex | string;
     public headers: IncomingHttpHeaders & IncomingHttpStatusHeader;
 
     constructor(raw: HydroResponseData, protected decodeOptions: HydroRequestDecodeOptions<T>) {
         this.raw = raw;
+        this.body = this.raw.data;
         this.headers = raw.headers;
     }
 
     public async decode(): Promise<this> {
+        if(this.decodeOptions.mode === DecodeMode.Stream)
+            return this;
+
         await this.decodeResponse(this.decodeOptions.mode ?? this.getDecodeMode());
         if (this.decodeOptions.transform) {
             this.body = this.decodeOptions.transform(this);
@@ -47,23 +41,8 @@ export class HydroResponse<T = any> {
     }
 
     protected async decodeResponse(mode: DecodeMode) {
-        const encoding = this.headerString(constants.HTTP2_HEADER_CONTENT_ENCODING, '');
-        if (encoding) {
-            switch (encoding) {
-                case 'gzip': {
-                    this.raw.data = await gunzipAsync(this.raw.data, {});
-                    break;
-                }
-                case 'deflate': {
-                    this.raw.data = await inflateAsync(this.raw.data, {});
-                    break;
-                }
-                case 'br': {
-                    this.raw.data = await brotliAsync(this.raw.data, {});
-                    break;
-                }
-            }
-        }
+        if(!Buffer.isBuffer(this.body))
+            return;
         switch (mode) {
             case DecodeMode.Buffer:
                 this.body = this.raw.data;
