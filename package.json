@@ -1,6 +1,6 @@
 {
   "name": "hydro-http",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "HTTP2 Client for Node.js",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
