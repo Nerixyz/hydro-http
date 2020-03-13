@@ -75,3 +75,15 @@ export class HydroResponse<T = any> {
         return res;
     }
 }
+
+export class HydroJsonResponse<T = any> extends HydroResponse {
+    public body: T;
+}
+
+export class HydroStringResponse extends HydroResponse {
+    public body: string;
+}
+
+export class HydroBufferResponse extends HydroResponse {
+    public body: Buffer;
+}
