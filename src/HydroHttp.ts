@@ -162,7 +162,7 @@ export class HydroHttp {
 
     protected stringifyValues(obj: object): Record<string, string> {
         return Object.fromEntries(
-            Object.entries(obj).map(([key, value]) => [
+            Object.entries(obj).filter(([,value]) => value != null).map(([key, value]) => [
                 key,
                 typeof value === 'object' ? JSON.stringify(value) : value.toString(),
             ]),
@@ -171,7 +171,7 @@ export class HydroHttp {
 
     protected stringifyHeaders(obj: object): Record<string, string> {
         return Object.fromEntries(
-            Object.entries(obj).map(([key, value]) => [
+            Object.entries(obj).filter(([,value]) => value != null).map(([key, value]) => [
                 key,
                 typeof value === 'object' ? (Array.isArray(value) ? value : JSON.stringify(value)) : value.toString(),
             ]),
