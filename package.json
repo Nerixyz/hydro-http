@@ -17,7 +17,7 @@
   "dependencies": {
     "debug": "^4.1.1",
     "form-data": "^3.0.0",
-    "tough-cookie": "^3.0.1",
+    "tough-cookie": "^4.0.0",
     "ts-custom-error": "^3.1.1",
     "lodash": "^4.17.15"
   },
